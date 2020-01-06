@@ -1,0 +1,426 @@
+ <?php
+include_once("conf/config.php");
+include_once('lib/oracle.php');
+include(PHPGRID_LIBPATH . "inc/jqgrid_dist.php");
+// master grid
+// Database config file to be passed in phpgrid constructor
+$db_conf = array(
+   "type" => PHPGRID_DBTYPE,
+   "server" => PHPGRID_DBHOST,
+   "user" => PHPGRID_DBUSER,
+   "password" => PHPGRID_DBPASS,
+   "database" => PHPGRID_DBNAME
+);
+
+$cur_org     = $_SESSION['user']->org_id;
+$employee_id = $_SESSION['user']->user_id;
+if (isset($_GET['EMPLOYEE_ID']))
+{
+   $employee_id = $_GET['EMPLOYEE_ID'];
+}
+if (isset($_GET['PERIOD_NAME']))
+{
+   $period_name   = $_GET['PERIOD_NAME'];
+   $period_status = substr($period_name, strpos($period_name, ">") + 1);
+   $period        = substr($period_name, 0, strpos($period_name, ">"));
+}
+else
+{
+   $reqq       = "SELECT v.period_name period, v.period_name || '>' || v.status period_name, v.status FROM apps.org_acct_periods_v v,(SELECT MAX (start_date) st_date FROM apps.org_acct_periods_v p WHERE p.organization_id = '" . $cur_org . "' AND p.status = 'Open') o WHERE v.organization_id = '" . $cur_org . "' AND v.start_date = o.st_date ";
+   $defper_req = oracle_query_array($reqq);
+   foreach ($defper_req as $defper_req)
+   {
+      $period_name   = $defper_req["PERIOD_NAME"];
+      $period_status = $defper_req["STATUS"];
+      $period        = $defper_req["PERIOD"];
+   }
+}
+
+$_GET['ORG_ID']      = $cur_org;
+$_GET['PERIOD']      = $period;
+$_GET['EMPLOYEE_ID'] = $employee_id;
+
+if (($_SESSION['admin'] == True) || ($_SESSION['review'] == True))
+{
+   $emplist = "<option value=''></option>";
+   $reqq    = "SELECT person_id,global_name FROM xsech_per_people_v7 e where e.current_employee_flag='Y' and org_id=apps.xxx_utils_sql.get_org_id_from_inv_id (" . $cur_org . ") order by global_name";
+   $emp_req = oracle_query_array($reqq);
+   foreach ($emp_req as $emp_req)
+   {
+      $outp = "<option value='" . $emp_req["PERSON_ID"];
+      if ($emp_req["PERSON_ID"] == $employee_id)
+      {
+         $outp = $outp . "' selected>";
+      }
+      else
+      {
+         $outp = $outp . "'>";
+      }
+      $emplist = $emplist . $outp . $emp_req["GLOBAL_NAME"] . "</option>";
+   }
+   $emplist = $emplist . "</select>";
+}
+else
+{
+   $emplist = "<option value='" . $employee_id . "' selected>";
+   $emplist = $emplist . $employee_id . $_SESSION['user']->fullname . "</select>";
+}
+$reqq    = "SELECT v.period_name, v.period_name||'>'||p.status per_status FROM apps.org_acct_periods_v p,(SELECT p.period_name FROM apps.org_acct_periods_v p WHERE p.organization_id = " . $cur_org . " AND p.status = 'Open' UNION SELECT distinct h.transaction_period FROM xxx_co_time.projtime_data h where h.employee_id=" . $employee_id . ") v WHERE v.period_name = p.period_name AND p.organization_id = " . $cur_org . " order by (p.period_year * 100 + p.period_number) * DECODE (p.status, 'Open', 10, 1) desc";
+$perlist = "<option value=''></option>";
+$outp    = "";
+$per_req = oracle_query_array($reqq);
+
+foreach ($per_req as $per_req)
+{
+   $outp = "<option value='" . $per_req["PER_STATUS"];
+   if ($per_req["PERIOD_NAME"] == $period)
+   {
+      $outp = $outp . "' selected>";
+   }
+   else
+   {
+      $outp = $outp . "'>";
+   }
+   $perlist = $perlist . $outp . $per_req["PERIOD_NAME"] . "</option>";
+}
+if ($period_status != 'Open')
+{
+   $perlist = $perlist . '&nbsp;&nbsp;Period closed';
+}
+$perlist = $perlist . "</select>";
+
+$g = new jqgrid($db_conf);
+
+// set few params
+
+
+$opt                     = array();
+$opt["caption"]          = "Time Sheet";
+$opt["height"]           = "";
+$opt["width"]            = "760";
+$opt["footerrow"]        = true;
+$opt["reloadedit"]       = true; // reload after inline edit
+$opt["multiselect"]      = false;
+$opt["autoid"]           = true;
+$opt["clone"]            = false;
+$opt["rowList"]          = array();
+$opt["pgbuttons"]        = false;
+$opt["pgtext"]           = null;
+$opt["altRows"]          = true;
+$opt["scroll"]           = true;
+$opt["viewrecords"]      = false;
+$opt["sortname"]         = 'WIP_NAME';
+$opt["altRows"]          = true;
+$opt["altclass"]         = "myAltRowClass";
+$opt["form"]["position"] = "center";
+
+// JS events
+$opt["ondblClickRow"] = "function (id) { grid_dblclick(id); }";
+$opt["loadComplete"]  = "function (id) { grid_load(id); }";
+$opt["onSelectRow"]   = "function (id) { grid_select(id); }";
+
+$g->set_options($opt);
+
+// set database table for CRUD operations
+$g->select_command = "SELECT record_id, org_id, employee_id,transaction_period, wip_name,wip_op_res_id, transaction_qty, decode(interfaced_flg,'Y','NoEdit',decode(p.status ,'Open','Edit','NoEdit')) editflag,interfaced_flg FROM projtime_data,apps.org_acct_periods_v p where p.organization_id='" . $cur_org . "' and p.period_name= transaction_period  and employee_id=" . $employee_id . " and transaction_period='" . $period . "'";
+$g->table          = "PROJTIME_DATA";
+
+$col["title"]    = "record_ID";
+$col["name"]     = "RECORD_ID";
+$col["width"]    = "4";
+$col["editable"] = false;
+$col["hidden"]   = true;
+$col["export"]   = false;
+$cols[]          = $col;
+
+$col             = array();
+$col["title"]    = "org code";
+$col["name"]     = "ORG_ID";
+$col["width"]    = "4";
+$col["editable"] = true;
+$col["hidden"]   = true;
+$col["export"]   = false;
+$cols[]          = $col;
+
+$col             = array();
+$col["title"]    = "editflag";
+$col["name"]     = "EDITFLAG";
+$col["editable"] = false;
+$col["hidden"]   = true;
+
+$col["edittype"]    = "checkbox";
+$col["editoptions"] = array("value" => "Edit:NoEdit");
+
+//$col["show"] = array("list"=>true, "add"=>true, "edit"=>true, "view"=>false);
+$cols[] = $col;
+
+$col             = array();
+$col["title"]    = "ID";
+$col["name"]     = "EMPLOYEE_ID";
+$col["width"]    = "4";
+$col["editable"] = true;
+$col["hidden"]   = true;
+$col["export"]   = false;
+$cols[]          = $col;
+
+$col             = array();
+$col["title"]    = "transaction_period";
+$col["name"]     = "TRANSACTION_PERIOD";
+$col["width"]    = "15";
+$col["editable"] = true;
+$col["hidden"]   = true;
+$col["export"]   = false;
+$cols[]          = $col;
+
+$col             = array();
+$col["title"]    = "Discrete Job";
+$col["name"]     = "WIP_NAME";
+$col["width"]    = "40";
+$col["editable"] = true;
+$col["search"]   = true;
+
+$col["editrules"]   = array(
+   "required" => true,
+   "readonly" => true,
+   "readonly-when" => array("EDITFLAG","==","NoEdit")
+);
+$col["edittype"]    = "select";
+//  $col["formatter"]     = "select";
+$cur                = $g->get_dropdown_values("select wip_name as k, upper(wip_name) as v from xsech_projtime_wip where organization_id='" . $cur_org . "' and status_type in (3,4) order by 2");
+$col["editoptions"] = array(
+   "value" => ":;" . $cur,
+   "onchange" => array(
+      "update_field" => "WIP_OP_RES_ID",
+      "sql" => "select WIP_OP_RES_ID as k, OP_RESOURCE as v from xsech_projtime_res where xsech_projtime_res.organization_id='" . $cur_org . "' and WIP_OP_RES_ID in (select WIP_OP_RES_ID from xsech_projtime_wip_resources where organization_id='" . $cur_org . "' and wip_name='{WIP_NAME}') "
+   )
+);
+
+$col["searchoptions"]["sopt"] = array("cn");
+$col["formatoptions"]         = array("value" => ":;" . $cur);
+$col["export"]                = false;
+$cols[]                       = $col;
+$col                          = array();
+
+$col["title"]       = "Resource";
+$col["name"]        = "WIP_OP_RES_ID";
+$col["width"]       = "80";
+$col["editable"]    = true;
+$col["search"]      = false;
+$col["editrules"]   = array(
+   "required" => true,
+   "readonly" => true,
+   "readonly-when" => array("EDITFLAG","==","NoEdit")
+);
+$col["edittype"]    = "select";
+$col["formatter"]   = "select";
+$cur                = $g->get_dropdown_values("select WIP_OP_RES_ID as k, OP_RESOURCE as v from xsech_projtime_res where organization_id='" . $cur_org . "' ");
+$col["editoptions"] = array(
+   "value" => $cur,
+);
+$cols[]             = $col;
+
+$col              = array();
+$col["title"]     = "# Min";
+$col["name"]      = "TRANSACTION_QTY";
+$col["width"]     = "30";
+$col["editable"]  = true;
+$col["search"]    = true;
+$col["editrules"]   = array(
+   "required" => true,
+   "readonly" => true,
+   "readonly-when" => array("EDITFLAG","==","NoEdit")
+);
+$col["align"]     = "right";
+$col["export"]    = false;
+$cols[]           = $col;
+
+$col                = array();
+$col["title"]       = "Interfaced";
+$col["name"]        = "INTERFACED_FLG";
+$col["search"]      = false;
+$col["align"]     = "center";
+
+$col["width"]       = "30";
+$col["editable"]    = true;
+$col["editrules"]   = array(
+   "required" => true,
+   "readonly" => true
+);
+$col["hidden"]      = false;
+$col["formatter"]   = "checkbox";
+$col["edittype"]    = "checkbox";
+$col["editoptions"] = array(
+   "value" => "Y:N"
+);
+
+$cols[] = $col;
+
+$g->set_columns($cols);
+
+$g->set_actions(array(
+   "add" => false, // allow/disallow add
+   "edit" => true, // allow/disallow edit
+   "inlineadd" => true, // allow/disallow edit
+   "clone" => false, // allow/disallow delete
+   "delete" => true, // allow/disallow delete
+   "view" => true, // allow/disallow view
+   "rowactions" => true, // show/hide row wise edit/del/save option
+   "export" => false, // show/hide export to excel option
+   "autofilter" => true, // show/hide autofilter for search
+   "search" => "advance"
+   // show single/multi field search condition (e.g. simple or advance)
+  
+));
+
+$e              = array();
+$e["on_insert"] = array(
+   "add_row",
+   null,
+   true
+);
+$e["on_update"] = array(
+   "update_row",
+   null,
+   true
+);
+
+$g->set_events($e);
+function add_row(&$data)
+{
+   $id                                   = intval($_GET["rowid"]);
+   $data["params"]["EMPLOYEE_ID"]        = intval($_GET["EMPLOYEE_ID"]);
+   $data["params"]["TRANSACTION_PERIOD"] = addslashes($_GET["PERIOD"]);
+   $data["params"]["ORG_ID"]             = intval($_GET["ORG_ID"]);
+  
+}
+function update_row(&$data)
+{
+   $id = intval($_GET["rowid"]);
+}
+
+// render grid
+$out = $g->render("list1");
+
+?>
+<?php
+include(MYLIB . 'header.php');
+?>
+<script>
+      function resubmit()
+      {
+         document.timesheet.action="index.php?page=timesheet";
+         document.timesheet.submit();
+      }
+
+</script>
+    <div style="float:left; width:100%;">
+        <form name=timesheet >
+        <h3>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;Employee :&nbsp;&nbsp;&nbsp;&nbsp;<select name=EMPLOYEE_ID onchange="resubmit()">
+<?php
+echo $emplist;
+?>
+            &nbsp;&nbsp;&nbsp;&nbsp;Period:&nbsp;&nbsp;&nbsp;&nbsp;<select name="PERIOD_NAME" onchange="resubmit()">
+<?php
+echo $perlist;
+?>
+</h3></form>
+<style>
+    /* alternate row color */
+    .myAltRowClass { background-color: #F1F1F1 !important; background-image: url('') !important; }
+
+    /* adjust highlight row option */
+    .ui-state-highlight, .ui-widget-content .ui-state-highlight, .ui-widget-header .ui-state-highlight
+    {
+        background: #fbec88 url("images/ui-bg_flat_55_fbec88_40x100.png") repeat-x scroll 50% 50% !important;
+    }    
+</style>
+    <?php
+echo $out;
+?>
+
+    <script>
+    function grid_dblclick(id) 
+    {
+            var grid = $('#list1');
+            var data = grid.getRowData(id);
+            
+            if (data.EDITFLAG == 'NoEdit') // view only
+            {
+                return;
+            }
+            else
+                jQuery(this).jqGrid('editGridRow', id, <?php
+echo json_encode_jsfunc($g->options["edit_options"]);
+?>);
+    }
+    function grid_load()
+    {
+        var grid = $('#list1');
+        var rowids = grid.getDataIDs();
+        var columnModels = grid.getGridParam().colModel;
+
+        // check each visible row
+        for (var i = 0; i < rowids.length; i++) 
+        {
+            var rowid = rowids[i];
+            var data = grid.getRowData(rowid);
+
+            if (data.EDITFLAG == 'NoEdit') // view only
+            {    
+                jQuery("tr#"+rowid).addClass("not-editable-row");
+                  jQuery("tr#"+rowid+" td[aria-describedby$='_act']").html("-");
+            }
+            
+        }
+        
+        // for multiselect check all, list1 is grid id
+        $("#cb_list1").click(function(){
+            
+            var selr_one = grid.getGridParam('selrow');
+            var selr = [];
+            selr = grid.jqGrid('getGridParam','selarrrow'); // array of id's of the selected rows when multiselect options is true. Empty array if not selection 
+            if (selr.length < 2 && selr_one)
+                selr[0] = selr_one;
+                
+            for (var x=0;x < selr.length;x++)
+            {
+                rowid = selr[x];
+                var data = grid.getRowData(rowid);
+
+                if (data.EDITFLAG == 'NoEdit') // view only
+                {    
+                    jQuery("#list1_pager #edit_list1, #list1_toppager #edit_list1").addClass("ui-state-disabled");
+                    jQuery("#list1_pager #del_list1, #list1_toppager #del_list1").addClass("ui-state-disabled");
+                }
+            }
+        });
+    }
+
+    function grid_select(id)
+    {
+        var grid = $('#list1');
+        
+        var rowid = grid.getGridParam('selrow');
+        if (rowid)
+        {
+            var data = grid.getRowData(rowid);
+            if (data.EDITFLAG == 'NoEdit') // view only
+            {    
+                jQuery("#list1_pager #edit_list1, #list1_toppager #edit_list1").addClass("ui-state-disabled");
+                jQuery("#list1_pager #del_list1, #list1_toppager #del_list1").addClass("ui-state-disabled");
+            }
+            else
+            {
+                jQuery("#list1_pager #edit_list1, #list1_toppager #edit_list1").removeClass("ui-state-disabled");
+                jQuery("#list1_pager #del_list1, #list1_toppager #del_list1").removeClass("ui-state-disabled");
+
+            }
+        }
+        
+    }
+    
+    
+    </script>
+<?php
+include(MYLIB . 'footer.php');
+?>
